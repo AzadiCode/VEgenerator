@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="color-scheme" content="light dark">
+<title>استودیو پست</title>
+<script>
+  // تم اولیه قبل از رندر تا چشمک نزنه
+  (function () {
+    var tg = window.Telegram && window.Telegram.WebApp;
+    var dark = tg && tg.colorScheme ? tg.colorScheme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  })();
+</script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css">
+<style>
+:root, :root[data-theme="light"] {
+  --bg: #EEF4F3; --surface: #FFFFFF; --surface2: #E1EDEA; --line: #C9DCD8;
+  --text: #0E2430; --muted: #53707B; --accent: #0A8F7E; --accent-ink: #FFFFFF;
+  --warm: #9A6200; --danger: #B3291F; --glow: rgba(10,143,126,.16);
+  --shadow: 0 10px 28px rgba(14,36,48,.10); color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #0A1520; --surface: #12212D; --surface2: #1A2E3C; --line: #28404F;
+  --text: #E8F2F1; --muted: #8DA8B1; --accent: #35D0BA; --accent-ink: #04271F;
+  --warm: #F4B740; --danger: #FF8D83; --glow: rgba(53,208,186,.20);
+  --shadow: 0 12px 30px rgba(0,0,0,.5); color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font-family: "Vazirmatn", "Vazir", Tahoma, system-ui, sans-serif; font-size: 15px; line-height: 1.75;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom)); min-height: 100vh;
+}
+button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.wrap { max-width: 560px; margin: 0 auto; padding: 14px 16px 24px; }
+
+/* ── سربرگ ── */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0 12px; }
+.brand { font-size: 19px; font-weight: 800; letter-spacing: -.2px; }
+.quota { display: flex; gap: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+.pill svg { width: 15px; height: 15px; color: var(--warm); }
+
+/* ── قاب (عنصر اصلی طراحی): نسبت خروجی رو زنده نشون میده ── */
+.stage { display: flex; justify-content: center; padding: 10px 0 18px; }
+.frame {
+  --r: .8; position: relative; height: auto; width: min(100%, calc(190px * var(--r))); aspect-ratio: var(--r);
+  border-radius: 6px; background: radial-gradient(130% 90% at 25% 0%, var(--glow), transparent 62%), var(--surface);
+  border: 1px solid var(--line); overflow: hidden; display: grid; place-items: center;
+  transition: width .35s cubic-bezier(.3,.9,.3,1);
+}
+.frame .c { position: absolute; width: 16px; height: 16px; border: 0 solid var(--accent); }
+.frame .tl { top: 7px; inset-inline-start: 7px; border-top-width: 2px; border-inline-start-width: 2px; }
+.frame .tr { top: 7px; inset-inline-end: 7px; border-top-width: 2px; border-inline-end-width: 2px; }
+.frame .bl { bottom: 7px; inset-inline-start: 7px; border-bottom-width: 2px; border-inline-start-width: 2px; }
+.frame .br { bottom: 7px; inset-inline-end: 7px; border-bottom-width: 2px; border-inline-end-width: 2px; }
+.frame-emoji { font-size: 38px; opacity: .9; }
+.frame-ratio { position: absolute; bottom: 12px; inset-inline: 0; text-align: center; font-size: 12px; color: var(--muted); font-weight: 600; direction: ltr; }
+.frame-kind { position: absolute; top: 12px; inset-inline: 0; text-align: center; font-size: 12px; color: var(--muted); }
+
+/* ── کنترل‌ها ── */
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; background: var(--surface2); border-radius: 14px; }
+.seg button { padding: 8px 10px; border-radius: 10px; font-weight: 600; color: var(--muted); transition: background .15s, color .15s; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.sec { margin-top: 20px; }
+.sec h3 { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--muted); }
+.field { position: relative; margin-top: 16px; }
+textarea {
+  width: 100%; min-height: 112px; resize: vertical; padding: 13px 14px 26px; border-radius: 16px;
+  background: var(--surface); border: 1px solid var(--line); line-height: 1.8;
+}
+textarea::placeholder { color: var(--muted); opacity: .8; }
+.counter { position: absolute; bottom: 8px; inset-inline-start: 14px; font-size: 12px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chip { padding: 5px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--muted); text-align: start; }
+.chip:active { background: var(--surface2); }
+
+.fmts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.fmt { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px 8px; border-radius: 14px; background: var(--surface); border: 1.5px solid var(--line); font-size: 12px; line-height: 1.4; text-align: center; min-height: 86px; justify-content: flex-end; }
+.fmt .mini { height: 26px; width: calc(26px * var(--r)); border: 2px solid var(--muted); border-radius: 3px; }
+.fmt[aria-pressed="true"] { border-color: var(--accent); background: var(--glow); }
+.fmt[aria-pressed="true"] .mini { border-color: var(--accent); }
+
+.styles { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.styles::-webkit-scrollbar { display: none; }
+.style { flex: none; scroll-snap-align: start; display: flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 999px; background: var(--surface); border: 1.5px solid var(--line); font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.style[aria-pressed="true"] { border-color: var(--accent); background: var(--glow); }
+
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.row + .row { border-top: 1px solid var(--line); }
+.stepper { display: inline-flex; align-items: center; gap: 4px; background: var(--surface2); border-radius: 12px; padding: 3px; }
+.stepper button { width: 34px; height: 34px; border-radius: 9px; font-size: 18px; font-weight: 700; }
+.stepper button:disabled { opacity: .35; }
+.stepper b { min-width: 28px; text-align: center; }
+.row .seg { min-width: 190px; }
+
+.dock { position: sticky; bottom: calc(68px + env(safe-area-inset-bottom)); padding-top: 14px; margin-top: 8px; background: linear-gradient(to top, var(--bg) 70%, transparent); }
+.cta { width: 100%; padding: 14px; border-radius: 16px; background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: 16px; box-shadow: var(--shadow); transition: transform .12s, opacity .15s; }
+.cta:active { transform: scale(.985); }
+.cta:disabled { opacity: .45; box-shadow: none; }
+.cta small { font-weight: 600; opacity: .85; margin-inline-start: 6px; }
+.hint { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+
+/* ── پیشرفت ── */
+.live .frame { width: min(100%, calc(46vh * var(--r))); }
+.sweep { position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, var(--glow) 50%, transparent 70%); background-size: 250% 100%; animation: sweep 1.8s linear infinite; }
+@keyframes sweep { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+.live-pct { position: relative; font-size: 34px; font-weight: 800; }
+.step { text-align: center; font-weight: 600; margin: 4px 0 12px; min-height: 28px; }
+.bar { height: 6px; border-radius: 6px; background: var(--surface2); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 6px; transition: width .6s ease; }
+.small { font-size: 12.5px; color: var(--muted); text-align: center; margin: 10px 0 0; }
+
+/* ── کارت خروجی ── */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 12px; margin-top: 14px; }
+.mbox { --r: 1; width: min(100%, calc(62vh * var(--r))); aspect-ratio: var(--r); margin: 0 auto; border-radius: 8px; overflow: hidden; background: var(--surface2); }
+.mbox img, .mbox video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.cap { white-space: pre-wrap; margin: 12px 2px 6px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.tag { font-size: 12.5px; color: var(--accent); direction: rtl; }
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn { padding: 10px 12px; border-radius: 12px; background: var(--surface2); font-weight: 600; font-size: 14px; }
+.btn.main { grid-column: 1 / -1; background: var(--accent); color: var(--accent-ink); font-weight: 800; padding: 12px; }
+.btn.danger { color: var(--danger); }
+.btn:disabled { opacity: .5; }
+.res-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.res-head h2 { margin: 0; font-size: 20px; }
+.note { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--glow); font-size: 13.5px; white-space: pre-wrap; }
+.err { margin-top: 12px; padding: 14px; border-radius: 16px; border: 1px solid var(--danger); color: var(--danger); white-space: pre-wrap; font-weight: 600; }
+.link { color: var(--accent); font-weight: 700; padding: 6px 4px; }
+
+/* ── گالری ── */
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 6px; }
+.tile { position: relative; padding: 0; border-radius: 10px; overflow: hidden; background: var(--surface2); aspect-ratio: 4 / 5; border: 1px solid var(--line); }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile .badge { position: absolute; top: 8px; inset-inline-end: 8px; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.6); display: grid; place-items: center; }
+.tile .badge svg { width: 12px; height: 12px; color: #fff; }
+.empty { text-align: center; padding: 48px 16px; color: var(--muted); }
+.empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 6px; }
+
+/* ── تب‌بار / شیت / توست ── */
+.tabs { position: fixed; inset-inline: 0; bottom: 0; z-index: 20; display: flex; background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+.tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 9px 0 8px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.tabs button svg { width: 22px; height: 22px; }
+.tabs button[aria-selected="true"] { color: var(--accent); }
+.sheet { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; background: rgba(0,0,0,.55); }
+.sheet-body { width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; background: var(--bg); border-radius: 22px 22px 0 0; padding: 8px 16px calc(20px + env(safe-area-inset-bottom)); animation: up .22s ease-out; }
+@keyframes up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.sheet-bar { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.sheet-bar span { width: 36px; height: 4px; border-radius: 4px; background: var(--line); }
+.toast { position: fixed; z-index: 60; inset-inline: 16px; bottom: calc(86px + env(safe-area-inset-bottom)); max-width: 420px; margin: 0 auto; padding: 11px 16px; border-radius: 14px; background: var(--text); color: var(--bg); font-weight: 600; font-size: 14px; text-align: center; box-shadow: var(--shadow); }
+.toast.bad { background: var(--danger); color: #fff; }
+.gate { text-align: center; padding: 64px 20px; }
+.gate b { display: block; font-size: 18px; margin-bottom: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sweep { animation: none; } .sheet-body { animation: none; } .frame, .bar i { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header class="top">
+    <div class="brand">استودیو پست</div>
+    <div class="quota" aria-label="سهمیهٔ امروز">
+      <span class="pill" title="تصویر باقی‌مانده"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg><span id="qImg">–</span></span>
+      <span class="pill" title="ویدیو باقی‌مانده"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="3"/><path d="M17 10l4-2v8l-4-2"/></svg><span id="qVid">–</span></span>
+    </div>
+  </header>
+
+  <!-- ═══ تب ساخت ═══ -->
+  <main id="tab-create">
+    <section id="pane-form">
+      <div class="stage">
+        <div class="frame" id="frame">
+          <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+          <span class="frame-kind" id="frameKind"></span>
+          <span class="frame-emoji" id="frameEmoji">✨</span>
+          <span class="frame-ratio" id="frameRatio"></span>
+        </div>
+      </div>
+
+      <div class="seg" id="kindSeg" role="group" aria-label="نوع خروجی">
+        <button data-k="image" aria-pressed="true">تصویر</button>
+        <button data-k="video" aria-pressed="false">ویدیو</button>
+      </div>
+
+      <div class="field">
+        <textarea id="prompt" maxlength="800" aria-label="توضیح ایده" placeholder="ایده‌ات را بنویس؛ مثلاً: پوستر تبلیغاتی قهوهٔ تخصصی با بخار و نور صبحگاهی"></textarea>
+        <span class="counter" id="counter">۰ / ۸۰۰</span>
+      </div>
+      <div class="chips" id="examples"></div>
+
+      <div class="sec"><h3>فرمت خروجی</h3><div class="fmts" id="fmts"></div></div>
+      <div class="sec"><h3>سبک تصویر</h3><div class="styles" id="styles"></div></div>
+
+      <div class="sec" id="optImage">
+        <div class="row"><span>تعداد تصویر</span>
+          <div class="stepper"><button id="cMinus" aria-label="کمتر">−</button><b id="cVal">۱</b><button id="cPlus" aria-label="بیشتر">+</button></div>
+        </div>
+      </div>
+      <div class="sec" id="optVideo" hidden>
+        <div class="row"><span>تعداد صحنه</span>
+          <div class="seg" id="sceneSeg"><button data-v="3" aria-pressed="true">۳</button><button data-v="4" aria-pressed="false">۴</button><button data-v="5" aria-pressed="false">۵</button></div>
+        </div>
+        <div class="row"><span>صدای گوینده</span>
+          <div class="seg" id="voiceSeg"><button data-v="off" aria-pressed="true">بدون صدا</button><button data-v="female" aria-pressed="false">زن</button><button data-v="male" aria-pressed="false">مرد</button></div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <button class="cta" id="go" disabled>ساخت تصویر</button>
+        <p class="hint" id="hint"></p>
+      </div>
+    </section>
+
+    <section id="pane-progress" class="live" hidden>
+      <div class="stage">
+        <div class="frame" id="liveFrame">
+          <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+          <div class="sweep"></div>
+          <div class="live-pct" id="pct">۰٪</div>
+        </div>
+      </div>
+      <p class="step" id="step" role="status" aria-live="polite">در صف…</p>
+      <div class="bar"><i id="barFill"></i></div>
+      <p class="small" id="elapsed"></p>
+      <p class="small">اگر مینی‌اپ را ببندی، نتیجه بعد از آماده شدن در گالری می‌ماند.</p>
+    </section>
+
+    <section id="pane-error" hidden>
+      <div class="err" id="errText"></div>
+      <button class="cta" id="retry" style="margin-top:14px">برگشت و تلاش دوباره</button>
+    </section>
+
+    <section id="pane-results" hidden>
+      <div class="res-head"><h2>آماده شد</h2><button class="link" id="again">ساخت جدید</button></div>
+      <div class="note" id="resNote" hidden></div>
+      <div id="resList"></div>
+    </section>
+  </main>
+
+  <!-- ═══ تب گالری ═══ -->
+  <main id="tab-gallery" hidden>
+    <div class="res-head"><h2>گالری من</h2></div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="galEmpty" hidden><b>هنوز چیزی نساختی</b>اولین ایده‌ات را در تب «ساخت» بنویس.</div>
+  </main>
+</div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" id="tabBtnCreate" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17v4M17 19h4"/></svg>ساخت</button>
+  <button role="tab" id="tabBtnGallery" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg><span id="galLabel">گالری</span></button>
+</nav>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-body" role="dialog" aria-modal="true">
+    <div class="sheet-bar"><span></span><button class="link" id="sheetClose">بستن</button></div>
+    <div id="sheetContent"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var INIT = tg ? (tg.initData || '') : '';
+  if (tg) {
+    try { tg.ready(); tg.expand(); if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+    try { tg.setHeaderColor('bg_color'); tg.setBackgroundColor('bg_color'); } catch (e) {}
+  }
+  var $ = function (id) { return document.getElementById(id); };
+  if (!INIT) {
+    $('app').innerHTML = '<div class="gate"><b>این مینی‌اپ باید داخل تلگرام باز شود</b>ربات را در تلگرام باز کن و روی «ورود به استودیو» بزن.</div>';
+    document.querySelector('.tabs').hidden = true;
+    return;
+  }
+
+  // ───────── ابزارها ─────────
+  function fa(n) { return Number(n).toLocaleString('fa-IR'); }
+  function h(tag, props) {
+    var e = document.createElement(tag), p = props || {};
+    Object.keys(p).forEach(function (k) {
+      var v = p[k];
+      if (k === 'class') e.className = v;
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), v);
+      else if (v !== false && v != null) e.setAttribute(k, v === true ? '' : v);
+    });
+    for (var i = 2; i < arguments.length; i++) {
+      [].concat(arguments[i]).forEach(function (c) { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c)); });
+    }
+    return e;
+  }
+  function api(path, opt) {
+    opt = opt || {};
+    return fetch(path, {
+      method: opt.method || 'GET',
+      headers: { 'X-Init-Data': INIT, 'Content-Type': 'application/json' },
+      body: opt.body ? JSON.stringify(opt.body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { var e = new Error(j.error || 'ارتباط با سرور برقرار نشد'); e.status = r.status; e.data = j; throw e; }
+        return j;
+      });
+    });
+  }
+  var toastTimer;
+  function toast(msg, bad) {
+    var old = document.querySelector('.toast'); if (old) old.remove();
+    var t = h('div', { class: 'toast' + (bad ? ' bad' : ''), role: 'status' }, msg);
+    document.body.append(t); clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.remove(); }, 2800);
+  }
+  function haptic(type) { try { tg.HapticFeedback.notificationOccurred(type); } catch (e) {} }
+  function copyText(txt) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+    return new Promise(function (ok, no) {
+      var ta = h('textarea', { style: 'position:fixed;opacity:0' }); ta.value = txt; document.body.append(ta); ta.select();
+      try { document.execCommand('copy') ? ok() : no(); } catch (e) { no(e); } ta.remove();
+    });
+  }
+  function confirmBox(msg, cb) {
+    if (tg && tg.showConfirm) tg.showConfirm(msg, function (ok) { if (ok) cb(); });
+    else if (window.confirm(msg)) cb();
+  }
+
+  // ───────── وضعیت ─────────
+  var FMT_ORDER = ['story', 'portrait', 'square', 'wide'];
+  var RATIO = { '9:16': 9 / 16, '4:5': 4 / 5, '1:1': 1, '16:9': 16 / 9 };
+  var EXAMPLES = {
+    image: ['پوستر تبلیغاتی قهوهٔ تخصصی با بخار و نور صبحگاهی', 'عکس محصول عطر لوکس روی مرمر سیاه', 'کافهٔ دنج بارانی با نور گرم برای پست شبانه', 'ایلاستریشن انگیزشی از کوهنورد بالای قله'],
+    video: ['ریلز معرفی یک کافهٔ جدید در پاییز', 'تیزر عطر لوکس با حس رمز و راز', 'سفر به اصفهان در ساعت غروب', 'روتین صبح یک ورزشکار برای انگیزه گرفتن']
+  };
+  var S = { me: null, kind: 'image', fmt: 'portrait', fmtTouched: false, style: 'auto', count: 1, scenes: 3, voice: 'off', gallery: [], tab: 'create', busy: false, lastJob: 0 };
+  var pollTimer = null, tickTimer = null;
+
+  var PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+
+  // ───────── رندر فرم ─────────
+  function fmtKeys() { return FMT_ORDER.filter(function (k) { return S.me.formats[k]; }); }
+  function ratioOf(k) { return RATIO[S.me.formats[k].ratio] || 1; }
+
+  function renderQuota() {
+    $('qImg').textContent = fa(S.me.quota.image);
+    $('qVid').textContent = fa(S.me.quota.video);
+  }
+  function renderFrame() {
+    var f = S.me.formats[S.fmt], st = S.me.styles.filter(function (s) { return s.id === S.style; })[0];
+    $('frame').style.setProperty('--r', ratioOf(S.fmt));
+    $('frameRatio').textContent = f.ratio;
+    $('frameKind').textContent = f.label;
+    $('frameEmoji').textContent = st ? st.emoji : '✨';
+  }
+  function renderFormats() {
+    var box = $('fmts'); box.innerHTML = '';
+    fmtKeys().forEach(function (k) {
+      var f = S.me.formats[k];
+      var b = h('button', { class: 'fmt', 'aria-pressed': String(S.fmt === k), onclick: function () { S.fmt = k; S.fmtTouched = true; renderFormats(); renderFrame(); } },
+        h('span', { class: 'mini', style: '--r:' + ratioOf(k) }), f.label);
+      box.append(b);
+    });
+  }
+  function renderStyles() {
+    var box = $('styles'); box.innerHTML = '';
+    S.me.styles.forEach(function (s) {
+      box.append(h('button', { class: 'style', 'aria-pressed': String(S.style === s.id), onclick: function () { S.style = s.id; renderStyles(); renderFrame(); } }, s.emoji + ' ' + s.label));
+    });
+  }
+  function renderExamples() {
+    var box = $('examples'); box.innerHTML = '';
+    EXAMPLES[S.kind].forEach(function (t) {
+      box.append(h('button', { class: 'chip', onclick: function () { $('prompt').value = t; onType(); $('prompt').focus(); } }, t));
+    });
+  }
+  function setSeg(id, val) {
+    [].forEach.call($(id).querySelectorAll('button'), function (b) { b.setAttribute('aria-pressed', String(b.dataset.v === String(val))); });
+  }
+  function cost() { return S.kind === 'image' ? S.count : 1; }
+  function renderCTA() {
+    var left = S.me.quota[S.kind], len = $('prompt').value.trim().length, c = cost();
+    $('go').innerHTML = '';
+    $('go').append(S.kind === 'image' ? 'ساخت تصویر' : 'ساخت ویدیو', h('small', null, fa(c) + ' از سهمیه'));
+    $('go').disabled = S.busy || len < 5 || left < c;
+    $('hint').textContent = left < c ? 'سهمیهٔ امروزت برای این بخش تمام شده؛ فردا دوباره امتحان کن.'
+      : (len < 5 ? 'ایده را کمی کامل‌تر بنویس.' : (S.kind === 'image' ? 'ساخت هر تصویر معمولاً چند ده ثانیه تا دو دقیقه طول می‌کشد.' : 'ساخت ویدیو معمولاً دو تا پنج دقیقه طول می‌کشد.'));
+  }
+  function renderKind() {
+    [].forEach.call($('kindSeg').querySelectorAll('button'), function (b) { b.setAttribute('aria-pressed', String(b.dataset.k === S.kind)); });
+    $('optImage').hidden = S.kind !== 'image';
+    $('optVideo').hidden = S.kind !== 'video';
+    if (!S.fmtTouched) S.fmt = S.kind === 'video' ? 'story' : 'portrait';
+    renderFormats(); renderFrame(); renderExamples(); renderCTA();
+  }
+  function onType() {
+    var n = $('prompt').value.length; $('counter').textContent = fa(n) + ' / ' + fa(800); renderCTA();
+  }
+
+  // ───────── نمایش بخش‌های تب ساخت ─────────
+  function pane(name) {
+    ['form', 'progress', 'error', 'results'].forEach(function (p) { $('pane-' + p).hidden = p !== name; });
+    window.scrollTo(0, 0);
+  }
+  function switchTab(t) {
+    S.tab = t;
+    $('tab-create').hidden = t !== 'create'; $('tab-gallery').hidden = t !== 'gallery';
+    $('tabBtnCreate').setAttribute('aria-selected', String(t === 'create'));
+    $('tabBtnGallery').setAttribute('aria-selected', String(t === 'gallery'));
+    if (t === 'gallery') renderGallery();
+    window.scrollTo(0, 0);
+  }
+
+  // ───────── کارت خروجی ─────────
+  function mediaCard(it, onGone) {
+    var ratio = it.w && it.h ? it.w / it.h : 1;
+    var box = h('div', { class: 'mbox', style: '--r:' + ratio },
+      it.kind === 'video'
+        ? h('video', { src: it.url, poster: it.thumb, controls: true, playsinline: true, preload: 'metadata' })
+        : h('img', { src: it.url, alt: it.prompt || 'تصویر ساخته‌شده' }));
+    var capText = (it.caption || '').trim();
+    var tagText = (it.hashtags || []).join(' ');
+    var full = (capText + (tagText ? '\n\n' + tagText : '')).trim();
+
+    function send(asFile, btn) {
+      var label = btn.textContent; btn.disabled = true; btn.textContent = 'در حال ارسال…';
+      api('/api/media/' + it.id + '/send', { method: 'POST', body: { as_file: asFile } })
+        .then(function () { toast('به چت ربات فرستاده شد'); haptic('success'); })
+        .catch(function (e) { toast(e.message, true); haptic('error'); })
+        .then(function () { btn.disabled = false; btn.textContent = label; });
+    }
+    var bSend = h('button', { class: 'btn main' }, it.kind === 'video' ? 'ارسال ویدیو به چت' : 'ارسال تصویر به چت');
+    bSend.addEventListener('click', function () { send(false, bSend); });
+    var bFile = h('button', { class: 'btn' }, 'فایل با کیفیت کامل');
+    bFile.addEventListener('click', function () { send(true, bFile); });
+    var bCopy = h('button', { class: 'btn', onclick: function () {
+      if (!full) return toast('کپشنی برای کپی نیست', true);
+      copyText(full).then(function () { toast('کپشن و هشتگ‌ها کپی شد'); }).catch(function () { toast('کپی نشد؛ متن را دستی انتخاب کن', true); });
+    } }, 'کپی کپشن و هشتگ');
+    var bAgain = h('button', { class: 'btn', onclick: function () { reuse(it); } }, 'ساخت دوباره');
+    var bDel = h('button', { class: 'btn danger', onclick: function () {
+      confirmBox('این مورد از گالری حذف شود؟', function () {
+        api('/api/media/' + it.id, { method: 'DELETE' }).then(function () {
+          S.gallery = S.gallery.filter(function (g) { return g.id !== it.id; }); renderGalleryLabel(); renderGallery(); toast('حذف شد'); if (onGone) onGone();
+        }).catch(function (e) { toast(e.message, true); });
+      });
+    } }, 'حذف');
+    return h('article', { class: 'card' }, box,
+      h('p', { class: 'cap' }, capText || 'کپشنی ساخته نشد؛ می‌توانی خودت بنویسی.'),
+      h('div', { class: 'tags' }, (it.hashtags || []).map(function (t) { return h('span', { class: 'tag' }, t); })),
+      h('div', { class: 'acts' }, bSend, bFile, bCopy, bAgain, bDel));
+  }
+  function reuse(it) {
+    var p = it.params || {};
+    closeSheet(); S.kind = p.kind || it.kind; S.style = p.style || it.style || 'auto'; S.fmt = p.fmt || it.fmt || S.fmt; S.fmtTouched = true;
+    if (p.count) S.count = p.count; if (p.scenes) { S.scenes = p.scenes; setSeg('sceneSeg', S.scenes); }
+    if (p.voice) { S.voice = p.voice; setSeg('voiceSeg', S.voice); }
+    $('prompt').value = p.prompt || it.prompt || ''; $('cVal').textContent = fa(S.count);
+    renderStyles(); renderKind(); onType(); pane('form'); switchTab('create');
+  }
+
+  // ───────── گالری و شیت ─────────
+  function renderGalleryLabel() { $('galLabel').textContent = S.gallery.length ? 'گالری (' + fa(S.gallery.length) + ')' : 'گالری'; }
+  function renderGallery() {
+    var g = $('grid'); g.innerHTML = '';
+    $('galEmpty').hidden = S.gallery.length > 0;
+    S.gallery.forEach(function (it) {
+      var t = h('button', { class: 'tile', 'aria-label': 'باز کردن ' + (it.kind === 'video' ? 'ویدیو' : 'تصویر'), onclick: function () { openSheet(it); } },
+        h('img', { src: it.thumb, alt: '', loading: 'lazy' }));
+      if (it.kind === 'video') { var b = h('span', { class: 'badge' }); b.innerHTML = PLAY; t.append(b); }
+      g.append(t);
+    });
+  }
+  function openSheet(it) {
+    var c = $('sheetContent'); c.innerHTML = ''; c.append(mediaCard(it, closeSheet));
+    $('sheet').hidden = false; document.body.style.overflow = 'hidden';
+    if (tg && tg.BackButton) { try { tg.BackButton.show(); tg.BackButton.onClick(closeSheet); } catch (e) {} }
+  }
+  function closeSheet() {
+    if ($('sheet').hidden) return;
+    $('sheet').hidden = true; $('sheetContent').innerHTML = ''; document.body.style.overflow = '';
+    if (tg && tg.BackButton) { try { tg.BackButton.offClick(closeSheet); tg.BackButton.hide(); } catch (e) {} }
+  }
+
+  // ───────── ساخت و پیگیری ─────────
+  function showProgress(fmt) {
+    $('liveFrame').style.setProperty('--r', RATIO[S.me.formats[fmt].ratio] || 1);
+    $('pct').textContent = fa(0) + '٪'; $('barFill').style.width = '0%'; $('step').textContent = 'در صف…';
+    pane('progress');
+    var t0 = Date.now(); clearInterval(tickTimer);
+    tickTimer = setInterval(function () {
+      var s = Math.round((Date.now() - t0) / 1000), m = Math.floor(s / 60), r = s % 60;
+      $('elapsed').textContent = 'زمان سپری‌شده: ' + fa(m) + ':' + (r < 10 ? '۰' : '') + fa(r);
+    }, 1000);
+  }
+  function stopTimers() { clearTimeout(pollTimer); clearInterval(tickTimer); }
+
+  function poll(jid, fails) {
+    api('/api/jobs/' + jid).then(function (j) {
+      if (j.quota) { S.me.quota = j.quota; renderQuota(); }
+      $('pct').textContent = fa(j.pct || 0) + '٪'; $('barFill').style.width = (j.pct || 0) + '%'; if (j.step) $('step').textContent = j.step;
+      if (j.status === 'done') return finish(j);
+      if (j.status === 'error') return fail(j.error);
+      pollTimer = setTimeout(function () { poll(jid, 0); }, 2500);
+    }).catch(function (e) {
+      if (e.status === 404) return fail('این ساخت پیدا نشد؛ گالری را بررسی کن.');
+      if ((fails || 0) >= 8) return fail('ارتباط با سرور قطع شد. بعداً گالری را بررسی کن؛ اگر ساخته شده باشد آنجاست.');
+      pollTimer = setTimeout(function () { poll(jid, (fails || 0) + 1); }, 4000);
+    });
+  }
+  function finish(j) {
+    stopTimers(); S.busy = false; haptic('success');
+    var list = $('resList'); list.innerHTML = '';
+    var items = j.items || [];
+    items.forEach(function (it) { list.append(mediaCard(it)); });
+    $('resNote').hidden = !j.error; $('resNote').textContent = j.error || '';
+    refreshGallery(); pane('results'); renderCTA();
+  }
+  function fail(msg) {
+    stopTimers(); S.busy = false; haptic('error');
+    $('errText').textContent = msg || 'ساخت ناموفق بود؛ دوباره امتحان کن.';
+    api('/api/me').then(function (m) { S.me.quota = m.quota; renderQuota(); renderCTA(); }).catch(function () {});
+    pane('error');
+  }
+  function refreshGallery() {
+    return api('/api/media').then(function (r) { S.gallery = r.items || []; renderGalleryLabel(); if (S.tab === 'gallery') renderGallery(); }).catch(function () {});
+  }
+  function track(jid, fmt) { S.busy = true; showProgress(fmt); poll(jid, 0); }
+
+  function start() {
+    if ($('go').disabled) return;
+    var body = { kind: S.kind, prompt: $('prompt').value.trim(), style: S.style, fmt: S.fmt };
+    if (S.kind === 'image') body.count = S.count; else { body.scenes = S.scenes; body.voice = S.voice; }
+    S.busy = true; renderCTA();
+    api('/api/generate', { method: 'POST', body: body }).then(function (r) { track(r.job_id, S.fmt); })
+      .catch(function (e) {
+        S.busy = false;
+        if (e.status === 409 && e.data && e.data.job_id) { toast(e.message); track(e.data.job_id, S.fmt); }
+        else { toast(e.message, true); haptic('error'); renderCTA(); }
+      });
+  }
+
+  // ───────── رویدادها ─────────
+  $('prompt').addEventListener('input', onType);
+  $('go').addEventListener('click', start);
+  $('kindSeg').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { S.kind = b.dataset.k; renderKind(); } });
+  $('sceneSeg').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { S.scenes = +b.dataset.v; setSeg('sceneSeg', S.scenes); } });
+  $('voiceSeg').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { S.voice = b.dataset.v; setSeg('voiceSeg', S.voice); } });
+  function setCount(n) { S.count = Math.min(4, Math.max(1, n)); $('cVal').textContent = fa(S.count); $('cMinus').disabled = S.count <= 1; $('cPlus').disabled = S.count >= 4; renderCTA(); }
+  $('cMinus').addEventListener('click', function () { setCount(S.count - 1); });
+  $('cPlus').addEventListener('click', function () { setCount(S.count + 1); });
+  $('retry').addEventListener('click', function () { pane('form'); });
+  $('again').addEventListener('click', function () { pane('form'); });
+  $('tabBtnCreate').addEventListener('click', function () { switchTab('create'); });
+  $('tabBtnGallery').addEventListener('click', function () { switchTab('gallery'); });
+  $('sheetClose').addEventListener('click', closeSheet);
+  $('sheet').addEventListener('click', function (e) { if (e.target === $('sheet')) closeSheet(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSheet(); });
+
+  // ───────── شروع ─────────
+  api('/api/me').then(function (m) {
+    S.me = m; S.gallery = m.gallery || [];
+    renderQuota(); renderStyles(); renderKind(); setCount(1); renderGalleryLabel(); onType();
+  }).catch(function (e) {
+    $('app').innerHTML = '';
+    $('app').append(h('div', { class: 'gate' }, h('b', null, e.status === 401 ? 'نشست منقضی شده' : 'اتصال برقرار نشد'),
+      e.status === 401 ? 'مینی‌اپ را ببند و دوباره از ربات باز کن.' : 'اینترنت را بررسی کن و دوباره امتحان کن.'));
+    document.querySelector('.tabs').hidden = true;
+  });
+})();
+</script>
+</body>
+</html>
