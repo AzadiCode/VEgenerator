@@ -1,9 +1,8 @@
-
 Flask
 gunicorn
 pymongo
 requests
-cryptography
 mongomock
-telethon
 Pillow
+edge-tts
+imageio-ffmpeg
