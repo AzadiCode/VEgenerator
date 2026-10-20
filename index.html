@@ -159,6 +159,8 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
 .gate { text-align: center; padding: 64px 20px; }
 .gate b { display: block; font-size: 18px; margin-bottom: 8px; }
 
+.mhint { margin: 2px 2px 0; font-size: 12.5px; color: var(--muted); min-height: 1.2em; }
+
 @media (prefers-reduced-motion: reduce) {
   .sweep { animation: none; } .sheet-body { animation: none; } .frame, .bar i { transition: none; }
 }
@@ -199,6 +201,8 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
 
       <div class="sec"><h3>فرمت خروجی</h3><div class="fmts" id="fmts"></div></div>
       <div class="sec"><h3>سبک تصویر</h3><div class="styles" id="styles"></div></div>
+      <div class="sec" id="secModel" hidden><h3 id="modelTitle">مدل تولید</h3><div class="styles" id="models"></div><p class="mhint" id="modelHint"></p></div>
+      <div class="sec" id="secImgModel" hidden><h3>مدل تصویر صحنه‌ها</h3><div class="styles" id="imodels"></div></div>
 
       <div class="sec" id="optImage">
         <div class="row"><span>تعداد تصویر</span>
@@ -336,7 +340,7 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
     image: ['پوستر تبلیغاتی قهوهٔ تخصصی با بخار و نور صبحگاهی', 'عکس محصول عطر لوکس روی مرمر سیاه', 'کافهٔ دنج بارانی با نور گرم برای پست شبانه', 'ایلاستریشن انگیزشی از کوهنورد بالای قله'],
     video: ['ریلز معرفی یک کافهٔ جدید در پاییز', 'تیزر عطر لوکس با حس رمز و راز', 'سفر به اصفهان در ساعت غروب', 'روتین صبح یک ورزشکار برای انگیزه گرفتن']
   };
-  var S = { me: null, kind: 'image', fmt: 'portrait', fmtTouched: false, style: 'auto', count: 1, scenes: 3, voice: 'off', gallery: [], tab: 'create', busy: false, lastJob: 0 };
+  var S = { me: null, kind: 'image', fmt: 'portrait', fmtTouched: false, style: 'auto', model: 'auto', vmodel: 'auto', imodel: 'auto', count: 1, scenes: 3, voice: 'off', gallery: [], tab: 'create', busy: false, lastJob: 0 };
   var pollTimer = null, tickTimer = null;
 
   var PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
@@ -377,6 +381,29 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
       box.append(h('button', { class: 'chip', onclick: function () { $('prompt').value = t; onType(); $('prompt').focus(); } }, t));
     });
   }
+  function modelsOf(g) { return (S.me.models && S.me.models[g]) || []; }
+  function chips(boxId, list, cur, pick) {
+    var box = $(boxId); box.innerHTML = '';
+    list.forEach(function (m) {
+      box.append(h('button', { class: 'style', 'aria-pressed': String(cur === m.id), onclick: function () { pick(m.id); renderModels(); } }, (m.emoji || '') + ' ' + m.label));
+    });
+  }
+  function renderModels() {
+    var vid = S.kind === 'video', list = modelsOf(vid ? 'video' : 'image'), il = modelsOf('image');
+    var has = function (l, id) { return l.some(function (m) { return m.id === id; }); };
+    if (!has(modelsOf('image'), S.model)) S.model = 'auto';
+    if (!has(modelsOf('video'), S.vmodel)) S.vmodel = 'auto';
+    if (!has(il, S.imodel)) S.imodel = 'auto';
+    var cur = vid ? S.vmodel : S.model;
+    $('secModel').hidden = list.length < 2;
+    $('modelTitle').textContent = vid ? 'موتور ویدیو' : 'مدل تصویر';
+    chips('models', list, cur, function (id) { if (vid) S.vmodel = id; else S.model = id; });
+    var sel = list.filter(function (m) { return m.id === cur; })[0];
+    $('modelHint').textContent = sel && sel.note ? sel.note : '';
+    var usesImg = vid && il.length > 1 && (S.vmodel === 'auto' || S.vmodel === 'kenburns' || S.vmodel === 'local:parallax');
+    $('secImgModel').hidden = !usesImg;
+    if (usesImg) chips('imodels', il, S.imodel, function (id) { S.imodel = id; });
+  }
   function setSeg(id, val) {
     [].forEach.call($(id).querySelectorAll('button'), function (b) { b.setAttribute('aria-pressed', String(b.dataset.v === String(val))); });
   }
@@ -394,7 +421,7 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
     $('optImage').hidden = S.kind !== 'image';
     $('optVideo').hidden = S.kind !== 'video';
     if (!S.fmtTouched) S.fmt = S.kind === 'video' ? 'story' : 'portrait';
-    renderFormats(); renderFrame(); renderExamples(); renderCTA();
+    renderFormats(); renderFrame(); renderExamples(); renderModels(); renderCTA();
   }
   function onType() {
     var n = $('prompt').value.length; $('counter').textContent = fa(n) + ' / ' + fa(800); renderCTA();
@@ -458,6 +485,8 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
     closeSheet(); S.kind = p.kind || it.kind; S.style = p.style || it.style || 'auto'; S.fmt = p.fmt || it.fmt || S.fmt; S.fmtTouched = true;
     if (p.count) S.count = p.count; if (p.scenes) { S.scenes = p.scenes; setSeg('sceneSeg', S.scenes); }
     if (p.voice) { S.voice = p.voice; setSeg('voiceSeg', S.voice); }
+    if (p.model) { if (S.kind === 'video') S.vmodel = p.model; else S.model = p.model; }
+    if (p.image_model) S.imodel = p.image_model;
     $('prompt').value = p.prompt || it.prompt || ''; $('cVal').textContent = fa(S.count);
     renderStyles(); renderKind(); onType(); pane('form'); switchTab('create');
   }
@@ -533,7 +562,7 @@ textarea::placeholder { color: var(--muted); opacity: .8; }
   function start() {
     if ($('go').disabled) return;
     var body = { kind: S.kind, prompt: $('prompt').value.trim(), style: S.style, fmt: S.fmt };
-    if (S.kind === 'image') body.count = S.count; else { body.scenes = S.scenes; body.voice = S.voice; }
+    if (S.kind === 'image') { body.count = S.count; body.model = S.model; } else { body.scenes = S.scenes; body.voice = S.voice; body.model = S.vmodel; body.image_model = S.imodel; }
     S.busy = true; renderCTA();
     api('/api/generate', { method: 'POST', body: body }).then(function (r) { track(r.job_id, S.fmt); })
       .catch(function (e) {

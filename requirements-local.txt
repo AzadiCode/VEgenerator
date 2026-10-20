@@ -1,0 +1,11 @@
+# نصب اختیاری برای مدل‌های لوکال (LOCAL_MODELS=1):  pip install -r requirements-local.txt
+-r requirements.txt
+torch
+diffusers>=0.32
+transformers>=4.46
+accelerate
+safetensors
+sentencepiece
+protobuf
+numpy
+opencv-python-headless

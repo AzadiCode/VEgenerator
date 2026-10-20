@@ -9,6 +9,8 @@ Stack (مثل الگوی app-6.py): Flask + MongoDB(pymongo / mongomock) + می�
 - ویدیو: چند صحنهی AI + حرکت سینمایی + ترنزیشن + صدای گوینده (edge-tts) با ffmpeg
   (اختیاری: ویدیوی AI واقعی از Pollinations اگه کلید داشته باشی)
 - خروجیها توی MongoDB ذخیره میشن و با لینک امضاشده نمایش داده میشن
+- (جدید) مدلهای لوکال/متنباز بدون API و نامحدود: SD-Turbo / SDXL-Turbo / FLUX برای تصویر، پارالکس سهبعدی (Depth-Anything) و LTX-Video برای ویدیو
+  با LOCAL_MODELS=1 فعال میشن و کاربر داخل مینیاپ مدل رو انتخاب میکنه؛ بدون اون، رفتار قبلی دقیقاً همونه
 """
 import os, re, io, json, time, hmac, hashlib, secrets, logging, threading, random, shutil, subprocess, tempfile, asyncio, base64
 from urllib.parse import parse_qsl, quote
@@ -53,7 +55,19 @@ MEDIA_TTL_DAYS = int(os.environ.get("MEDIA_TTL_DAYS", "14"))
 MAX_JOBS      = int(os.environ.get("MAX_JOBS", "2"))         # ساخت همزمان در کل سرور
 DEBUG         = os.environ.get("DEBUG", "") == "1"
 MAX_PROMPT    = 800
-JOB_STALE_SEC = 900
+
+# ── مدلهای لوکال (اختیاری؛ پیشفرض خاموش) ──
+LOCAL_ENABLED  = os.environ.get("LOCAL_MODELS", "") == "1"                 # روشن کردن موتور لوکال (نیاز به requirements-local.txt)
+LOCAL_DEVICE   = os.environ.get("LOCAL_DEVICE", "auto").strip().lower()    # auto | cuda | mps | cpu
+LOCAL_CACHE    = os.environ.get("MODEL_CACHE_DIR", "").strip()             # مسیر ذخیرهی مدلها (روی Render بذار روی Persistent Disk مثل /var/data/models)
+LOCAL_FALLBACK = os.environ.get("LOCAL_FALLBACK", "1") != "0"              # اگه مدل لوکال شکست خورد → خودکار میره سراغ سرویسهای آنلاین
+LOCAL_PRELOAD  = os.environ.get("LOCAL_PRELOAD", "").strip()               # مثلا sd-turbo؛ هنگام استارت دانلود و لود میشه تا اولین کاربر منتظر نمونه
+LTX_FRAMES     = int(os.environ.get("LTX_FRAMES", "65"))                   # تعداد فریم هر کلیپ LTX (مضرب ۸ بعلاوه ۱) ~ ۲.۷ ثانیه
+LTX_STEPS      = int(os.environ.get("LTX_STEPS", "30"))
+DEPTH_REPO     = os.environ.get("DEPTH_MODEL", "depth-anything/Depth-Anything-V2-Small-hf").strip()
+if LOCAL_CACHE:
+    os.environ.setdefault("HF_HOME", LOCAL_CACHE)
+JOB_STALE_SEC = int(os.environ.get("JOB_STALE_SEC", "2400" if LOCAL_ENABLED else "900"))
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("studio")
@@ -326,7 +340,24 @@ def make_plan(kind, prompt, style, fmt, n_scenes, with_voice):
             "hashtags": clean_tags(raw.get("hashtags")), "scenes": scenes if kind == "video" else []}
 
 
-def build_prompt(base, style, fmt, variant=0):
+CLIP_LOCAL = {"sd-turbo", "sdxl-turbo"}     # مدلهای CLIP: سقف ~۷۷ توکن؛ پرامپت باید کوتاه و مهمترینها اول باشه
+
+
+def local_id(model):
+    return model[6:] if str(model or "").startswith("local:") else None
+
+
+def build_prompt(base, style, fmt, variant=0, local=None):
+    if local:   # مدل لوکال: بدون «no text/no logo» (مدلهای دیفیوژن با نفی خوب کار نمیکنن) و برای CLIP کوتاه
+        if local in CLIP_LOCAL:
+            base = " ".join(base.split()[:34])
+        parts = [base]
+        if STYLES[style][2]:
+            parts.append(" ".join(STYLES[style][2].split()[:18]) if local in CLIP_LOCAL else STYLES[style][2])
+        if variant and VARIANTS[variant % len(VARIANTS)]:
+            parts.append(VARIANTS[variant % len(VARIANTS)])
+        parts.append("sharp focus, highly detailed, professional composition")
+        return ", ".join(parts)[:1400]
     parts = [base]
     if STYLES[style][2]:
         parts.append(STYLES[style][2])
@@ -439,9 +470,23 @@ PROVIDERS = {"pollinations": prov_pollinations, "cloudflare": prov_cloudflare, "
              "together": prov_together, "horde": prov_horde}
 
 
-def gen_image(prompt, fmt, seed):
+def gen_image(prompt, fmt, seed, model="auto", tick=None):
+    """model: auto | online:<provider> | local:<id>. اگه مدل انتخابی خراب بود، بقیهی زنجیره جایگزین میشه"""
     errs = []
-    for name in IMAGE_PROVIDERS:
+    order = list(IMAGE_PROVIDERS)
+    mid = local_id(model)
+    if mid:
+        try:
+            return local_image(mid, prompt, fmt, seed, tick), "local-" + mid
+        except Exception as e:
+            local_release()
+            log.warning("local image %s failed: %s", mid, e, exc_info=DEBUG)
+            errs.append(f"local-{mid}: {str(e)[:100]}")
+            if not LOCAL_FALLBACK:
+                raise UserError("مدل لوکال انتخاب‌شده الان قابل اجرا نیست؛ مدل دیگری انتخاب کن." + (f"\n[{errs[-1]}]" if DEBUG else ""))
+    elif str(model).startswith("online:") and model[7:] in PROVIDERS:
+        order = [model[7:]] + [x for x in order if x != model[7:]]
+    for name in order:
         fn = PROVIDERS.get(name)
         if not fn:
             continue
@@ -454,6 +499,205 @@ def gen_image(prompt, fmt, seed):
             log.warning("provider %s failed: %s", name, e)
     raise UserError("الان همهی سرویسهای رایگان تصویر شلوغن؛ چند دقیقه بعد دوباره امتحان کن."
                     + (f"\n[{' | '.join(errs)}]" if DEBUG else ""))
+
+
+# ───────────────────────── موتور مدلهای لوکال (بدون API، بدون سقف) ─────────────────────────
+# همهچیز lazy است: تا LOCAL_MODELS=1 نباشه حتی torch ایمپورت نمیشه. همزمان فقط یک مدل سنگین توی حافظه میمونه.
+import importlib.util as _iu
+from contextlib import contextmanager
+
+LOCAL_IMAGE_MODELS = {
+    "sd-turbo":     {"label": "SD-Turbo", "repo": "stabilityai/sd-turbo", "area": 512 * 512, "steps": 2, "cfg": 0.0, "gpu_only": False,
+                     "need": ("torch", "diffusers", "transformers"), "note": "سریع و سبک؛ روی CPU هم کار می‌کند (چند ده ثانیه)"},
+    "sdxl-turbo":   {"label": "SDXL-Turbo", "repo": "stabilityai/sdxl-turbo", "area": 512 * 512, "steps": 2, "cfg": 0.0, "gpu_only": False,
+                     "need": ("torch", "diffusers", "transformers"), "note": "جزئیات بهتر؛ روی GPU توصیه می‌شود"},
+    "flux-schnell": {"label": "FLUX.1-schnell", "repo": "black-forest-labs/FLUX.1-schnell", "area": 1024 * 1024, "steps": 4, "cfg": 0.0, "gpu_only": True,
+                     "need": ("torch", "diffusers", "transformers"), "note": "بهترین کیفیت و درک پرامپت؛ فقط GPU"},
+}
+LOCAL_VIDEO_MODELS = {
+    "parallax":  {"label": "پارالکس سه‌بعدی", "need": ("torch", "transformers", "numpy", "cv2"), "gpu_only": False,
+                  "note": "عمق‌یابی تصویر + حرکت دوربین سه‌بعدی؛ روی CPU هم اجرا می‌شود"},
+    "ltx-video": {"label": "LTX-Video", "repo": "Lightricks/LTX-Video", "need": ("torch", "diffusers", "transformers", "numpy"), "gpu_only": True,
+                  "note": "ویدیوی AI واقعی از متن؛ فقط GPU و چند دقیقه زمان"},
+}
+_ids = lambda env, allowed: [x.strip() for x in os.environ.get(env, ",".join(allowed)).split(",") if x.strip() in allowed]
+LOCAL_IMAGE_IDS = _ids("LOCAL_IMAGE_MODELS", LOCAL_IMAGE_MODELS)
+LOCAL_VIDEO_IDS = _ids("LOCAL_VIDEO_MODELS", LOCAL_VIDEO_MODELS)
+
+_CAPS, _CAPS_LOCK = {}, threading.Lock()
+_LOCAL_LOCK = threading.Lock()
+_PIPE = {"key": None, "obj": None}
+_DEPTH = {"pipe": None}
+
+
+def local_caps():
+    with _CAPS_LOCK:
+        if _CAPS:
+            return _CAPS
+        c = {"enabled": LOCAL_ENABLED, "device": "cpu", "vram": 0.0}
+        for k in ("torch", "diffusers", "transformers", "numpy", "cv2"):
+            c[k] = bool(_iu.find_spec(k)) if LOCAL_ENABLED else False
+        if LOCAL_ENABLED and c["torch"]:
+            try:
+                import torch
+                dev = LOCAL_DEVICE
+                if dev == "auto":
+                    dev = "cuda" if torch.cuda.is_available() else ("mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu")
+                c["device"] = dev
+                if dev == "cuda":
+                    c["vram"] = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
+            except Exception:
+                log.warning("تشخیص torch/GPU ناموفق بود", exc_info=True)
+        _CAPS.update(c)
+        return _CAPS
+
+
+def local_status(group, mid):
+    """(آماده؟، توضیح) برای یک مدل لوکال"""
+    spec = (LOCAL_IMAGE_MODELS if group == "image" else LOCAL_VIDEO_MODELS)[mid]
+    c = local_caps()
+    if not c["enabled"]:
+        return False, "LOCAL_MODELS=1 فعال نیست"
+    miss = [k for k in spec["need"] if not c.get(k)]
+    if miss:
+        return False, "کتابخانه نصب نیست: " + ", ".join(miss)
+    if spec["gpu_only"] and c["device"] != "cuda":
+        return False, "این مدل فقط روی GPU (CUDA) اجرا می‌شود"
+    return True, spec["note"]
+
+
+def model_catalog():
+    """فهرست مدلهای قابل انتخاب برای مینیاپ (فقط مدلهایی که الان واقعاً آمادهاند)"""
+    img = [{"id": "auto", "label": "خودکار", "emoji": "✨", "note": "زنجیرهٔ سرویس‌ها با جایگزین خودکار"}]
+    for k, label, emo, ok in (("pollinations", "Pollinations", "🌸", True), ("cloudflare", "Cloudflare FLUX", "☁️", bool(CF_ACCOUNT_ID and CF_API_TOKEN)),
+                              ("huggingface", "HF FLUX", "🤗", bool(HF_TOKEN)), ("together", "Together", "🤝", bool(TOGETHER_KEY)), ("horde", "AI Horde", "🌍", True)):
+        if ok:
+            img.append({"id": "online:" + k, "label": label, "emoji": emo, "note": "سرویس آنلاین رایگان"})
+    vid = [{"id": "auto", "label": "خودکار", "emoji": "✨", "note": "بهترین حالت موجود با جایگزین خودکار"},
+           {"id": "kenburns", "label": "چندصحنه + حرکت دوربین", "emoji": "🎞", "note": "تصاویر صحنه‌ها با زوم و پن سینمایی و ترنزیشن"}]
+    if ENABLE_AI_VIDEO and POLLI_KEY:
+        vid.append({"id": "polli-video", "label": "ویدیوی AI آنلاین", "emoji": "🌸", "note": "ویدیوی AI از Pollinations"})
+    for mid in LOCAL_IMAGE_IDS:
+        ok, note = local_status("image", mid)
+        if ok:
+            img.append({"id": "local:" + mid, "label": LOCAL_IMAGE_MODELS[mid]["label"], "emoji": "🖥", "note": note, "local": True})
+    for mid in LOCAL_VIDEO_IDS:
+        ok, note = local_status("video", mid)
+        if ok:
+            vid.append({"id": "local:" + mid, "label": LOCAL_VIDEO_MODELS[mid]["label"], "emoji": "🖥", "note": note, "local": True})
+    return {"image": img, "video": vid}
+
+
+@contextmanager
+def _local_slot(tick=None):
+    """فقط یک کار لوکال همزمان؛ تا نوبتش نرسیده جاب رو زنده نگه میداره"""
+    while not _LOCAL_LOCK.acquire(timeout=15):
+        if tick:
+            tick()
+    try:
+        yield
+    finally:
+        _LOCAL_LOCK.release()
+
+
+def local_release():
+    """آزادسازی مدل از RAM/VRAM (بعد از خطا یا هنگام عوض شدن مدل)"""
+    _PIPE["key"] = _PIPE["obj"] = None
+    try:
+        import gc
+        gc.collect()
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def fit_size(fmt, area, mult=16):
+    ow, oh = FORMATS[fmt]["out"]
+    r = ow / oh
+    h = (area / r) ** 0.5
+    return max(mult, int(round(h * r / mult)) * mult), max(mult, int(round(h / mult)) * mult)
+
+
+def _get_pipe(group, mid):
+    key = (group, mid)
+    if _PIPE["key"] == key:
+        return _PIPE["obj"]
+    local_release()
+    import torch
+    c = local_caps()
+    dev, vram, tok = c["device"], c["vram"], (HF_TOKEN or None)
+    log.info("loading local model %s (%s)", mid, dev)
+    if group == "image" and mid == "flux-schnell":
+        from diffusers import FluxPipeline
+        pipe = FluxPipeline.from_pretrained(LOCAL_IMAGE_MODELS[mid]["repo"], torch_dtype=torch.bfloat16, token=tok)
+        pipe.to("cuda") if vram >= 40 else pipe.enable_model_cpu_offload()
+    elif group == "image":
+        from diffusers import AutoPipelineForText2Image
+        pipe = AutoPipelineForText2Image.from_pretrained(LOCAL_IMAGE_MODELS[mid]["repo"], torch_dtype=torch.float16 if dev == "cuda" else torch.float32,
+                                                          variant="fp16", token=tok)
+        pipe.to(dev)
+        if dev == "cpu":
+            pipe.enable_attention_slicing()
+    else:   # ltx-video
+        from diffusers import LTXPipeline
+        pipe = LTXPipeline.from_pretrained(LOCAL_VIDEO_MODELS[mid]["repo"], torch_dtype=torch.bfloat16, token=tok)
+        pipe.to("cuda") if vram >= 40 else pipe.enable_model_cpu_offload()
+        try:
+            pipe.vae.enable_tiling()
+        except Exception:
+            pass
+    try:
+        pipe.set_progress_bar_config(disable=True)
+    except Exception:
+        pass
+    _PIPE["key"], _PIPE["obj"] = key, pipe
+    return pipe
+
+
+def _step_cb(tick):
+    def cb(pipe, i, t, kw):
+        tick()
+        return kw
+    return cb
+
+
+def local_image(mid, prompt, fmt, seed, tick=None):
+    spec = LOCAL_IMAGE_MODELS[mid]
+    ok, why = local_status("image", mid)
+    if not ok:
+        raise RuntimeError(why)
+    w, h = fit_size(fmt, spec["area"], 16)
+    with _local_slot(tick):
+        pipe = _get_pipe("image", mid)
+        import torch
+        kw = {"prompt": prompt, "width": w, "height": h, "num_inference_steps": spec["steps"], "guidance_scale": spec["cfg"],
+              "generator": torch.Generator("cpu").manual_seed(int(seed))}
+        if mid == "flux-schnell":
+            kw["max_sequence_length"] = 256
+        if tick:
+            kw["callback_on_step_end"] = _step_cb(tick)
+        img = pipe(**kw).images[0]
+    b = io.BytesIO()
+    img.convert("RGB").save(b, "PNG")
+    return _check_image(b.getvalue())   # خروجی کوچکتر از قالب نهایی است؛ finish_image با کراپ + LANCZOS + شارپ به اندازهی کامل میرسونه
+
+
+def _local_boot():
+    c = local_caps()
+    log.info("local models: device=%s vram=%.1fGB libs=%s", c["device"], c["vram"], {k: c[k] for k in ("torch", "diffusers", "transformers", "numpy", "cv2")})
+    for g, ids in (("image", LOCAL_IMAGE_IDS), ("video", LOCAL_VIDEO_IDS)):
+        for mid in ids:
+            ok, note = local_status(g, mid)
+            log.info("  %s/%s: %s — %s", g, mid, "READY" if ok else "off", note)
+    if LOCAL_PRELOAD in LOCAL_IMAGE_IDS and local_status("image", LOCAL_PRELOAD)[0]:
+        try:
+            with _local_slot():
+                _get_pipe("image", LOCAL_PRELOAD)
+            log.info("preloaded %s", LOCAL_PRELOAD)
+        except Exception:
+            log.warning("preload failed", exc_info=True)
 
 
 # ───────────────────────── پردازش تصویر ─────────────────────────
@@ -586,6 +830,139 @@ def ai_video_pollinations(prompt, fmt):
     return None
 
 
+# ───────────────────────── ویدیوی لوکال: پارالکس سهبعدی + LTX-Video ─────────────────────────
+def _encode_frames(frames, W, H, fps, out_path):
+    """فریمهای RGB (numpy uint8) رو مستقیم به ffmpeg میریزه"""
+    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path]
+    with tempfile.TemporaryFile() as err:
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=err)
+        try:
+            for f in frames:
+                p.stdin.write(f.tobytes())
+            p.stdin.close()
+            p.wait(timeout=600)
+        except Exception:
+            p.kill()
+            raise
+        if p.returncode != 0 or not os.path.exists(out_path):
+            err.seek(0)
+            raise RuntimeError("ffmpeg: " + err.read().decode(errors="ignore")[-300:])
+
+
+def local_depth(img, tick=None):
+    """نقشهی عمق (۰ دور … ۱ نزدیک) با Depth-Anything-V2-Small؛ روی CPU هم چند ثانیه"""
+    import numpy as np
+    with _local_slot(tick):
+        if _DEPTH["pipe"] is None:
+            from transformers import pipeline
+            dev = local_caps()["device"]
+            _DEPTH["pipe"] = pipeline("depth-estimation", model=DEPTH_REPO, device=0 if dev == "cuda" else ("mps" if dev == "mps" else -1))
+        out = _DEPTH["pipe"](img.convert("RGB"))
+    return np.asarray(out["depth"].convert("L"), dtype=np.float32) / 255.0
+
+
+def parallax_clip(img, depth, motion, W, H, dur, out_path, fps=25):
+    """کلیپ ۲.۵بعدی: اجسام نزدیک بیشتر از پسزمینه جابجا میشن (حس واقعی عمق، نه فقط زوم ساده)"""
+    import numpy as np, cv2
+    S = 1.25
+    src = np.ascontiguousarray(np.asarray(cover_crop(img.convert("RGB"), int(W * S), int(H * S))))
+    d = cv2.resize(depth.astype("float32"), (W, H), interpolation=cv2.INTER_CUBIC)
+    d = cv2.GaussianBlur(d, (0, 0), max(2.0, W / 240))
+    lo, hi = np.percentile(d, (2, 98))
+    dn = np.clip((d - lo) / max(float(hi - lo), 1e-3), 0, 1).astype("float32")
+    gx, gy = np.meshgrid(np.arange(W, dtype="float32"), np.arange(H, dtype="float32"))
+    cx, cy, A = W / 2.0, H / 2.0, 0.045 * W
+    F = max(3, int(round(dur * fps)))
+    f_par = 0.3 + 1.4 * dn          # ضریب پارالکس: نزدیک بیشتر حرکت میکنه
+    f_zoom = 0.6 + 0.8 * dn
+
+    def frames():
+        for k in range(F):
+            t = k / (F - 1)
+            e = t * t * (3 - 2 * t)
+            zamp, camx, camy = 0.0, 0.0, 0.0
+            if motion == "zoom_in":
+                zamp, camx = 0.14 * e, 0.5 * A * (2 * e - 1)
+            elif motion == "zoom_out":
+                zamp, camx = 0.14 * (1 - e), 0.5 * A * (1 - 2 * e)
+            elif motion == "pan_left":
+                camx = A * (1 - 2 * e)
+            elif motion == "pan_right":
+                camx = A * (2 * e - 1)
+            elif motion == "pan_up":
+                camy = A * (1 - 2 * e)
+            else:
+                camy = A * (2 * e - 1)
+            zl = 1.0 + (0.06 if motion not in ("zoom_in", "zoom_out") else 0.02) + zamp * f_zoom
+            mx = (cx + (gx - cx) / zl + camx * f_par) * S
+            my = (cy + (gy - cy) / zl + camy * f_par) * S
+            yield cv2.remap(src, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    _encode_frames(frames(), W, H, fps, out_path)
+
+
+def make_parallax_clips(jid, paths, motions, fmt, per, td):
+    W, H = FORMATS[fmt]["vid"]
+    clips = []
+    for i, (pth, mo) in enumerate(zip(paths, motions)):
+        jset(jid, step=f"پارالکس سه‌بعدی صحنه {i + 1} از {len(paths)}…", pct=76 + int(10 * i / len(paths)))
+        img = Image.open(pth)
+        depth = local_depth(img, tick=lambda: jset(jid))
+        out = os.path.join(td, f"p{i}.mp4")
+        parallax_clip(img, depth, mo, W, H, per, out)
+        clips.append(out)
+    return clips
+
+
+def local_ltx_clip(prompt, fmt, seed, out_path, tick=None):
+    ok, why = local_status("video", "ltx-video")
+    if not ok:
+        raise RuntimeError(why)
+    import numpy as np, torch
+    w, h = fit_size(fmt, 704 * 480, 32)
+    nf = max(9, (LTX_FRAMES - 1) // 8 * 8 + 1)
+    with _local_slot(tick):
+        pipe = _get_pipe("video", "ltx-video")
+        kw = {"prompt": prompt, "negative_prompt": "worst quality, inconsistent motion, blurry, jittery, distorted, watermark",
+              "width": w, "height": h, "num_frames": nf, "num_inference_steps": LTX_STEPS, "generator": torch.Generator("cpu").manual_seed(int(seed))}
+        if tick:
+            kw["callback_on_step_end"] = _step_cb(tick)
+        frames = pipe(**kw).frames[0]
+    _encode_frames((np.asarray(f.convert("RGB")) for f in frames), w, h, 24, out_path)
+
+
+def render_video_from_clips(clips, durs, fmt, voice_path, out_path, vdur=None):
+    """چسباندن کلیپها با ترنزیشن + صدای گوینده (کلیپها هر اندازه/فریمریتی باشن یکدست میشن)"""
+    W, H = FORMATS[fmt]["vid"]
+    fps, n = 25, len(clips)
+    xf = min(0.7, min(durs) / 3)
+    total = sum(durs) - (n - 1) * xf
+    pad = max(0.0, (vdur or 0) + 0.8 - total)
+    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error"]
+    for c in clips:
+        cmd += ["-i", c]
+    if voice_path:
+        cmd += ["-i", voice_path]
+    chains = [f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps={fps},format=yuv420p[v{i}]" for i in range(n)]
+    trans = ["fade", "smoothleft", "fade", "smoothright"]
+    last, acc = "v0", durs[0]
+    for k in range(1, n):
+        chains.append(f"[{last}][v{k}]xfade=transition={trans[(k - 1) % len(trans)]}:duration={xf}:offset={round(acc - xf, 3)}[x{k}]")
+        last, acc = f"x{k}", acc + durs[k] - xf
+    tot = total + pad
+    tp = f"tpad=stop_mode=clone:stop_duration={round(pad, 3)}," if pad > 0 else ""
+    chains.append(f"[{last}]{tp}fade=t=in:st=0:d=0.4,fade=t=out:st={round(tot - 0.5, 3)}:d=0.5,eq=saturation=1.06:contrast=1.03[vout]")
+    if voice_path:
+        chains.append(f"[{n}:a]apad=whole_dur={round(tot, 3)},afade=t=out:st={round(tot - 0.8, 3)}:d=0.8[aout]")
+    cmd += ["-filter_complex", ";".join(chains), "-map", "[vout]"]
+    cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"] if voice_path else ["-an"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart", "-t", str(round(tot, 3)), out_path]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    if r.returncode != 0 or not os.path.exists(out_path):
+        raise RuntimeError("ffmpeg: " + r.stderr[-400:])
+    return tot
+
+
 # ───────────────────────── ذخیرهی خروجی و گالری ─────────────────────────
 def save_media(owner, kind, mime, data, thumb, meta):
     doc = {"owner": owner, "kind": kind, "mime": mime, "data": Binary(data), "thumb": Binary(thumb),
@@ -610,10 +987,12 @@ def do_image(job):
     jset(jid, step="دارم ایدهت رو به یه پرامپت حرفهای تبدیل میکنم…", pct=6)
     plan = make_plan("image", p["prompt"], style, fmt, 0, False)
     items = []
+    model = p.get("model", "auto")
     for i in range(n):
         jset(jid, step=f"در حال ساخت تصویر {i + 1} از {n}…", pct=12 + int(80 * i / n))
         try:
-            raw, prov = gen_image(build_prompt(plan["image_prompt"], style, fmt, i), fmt, random.randint(1, 2 ** 31 - 1))
+            raw, prov = gen_image(build_prompt(plan["image_prompt"], style, fmt, i, local=local_id(model)), fmt, random.randint(1, 2 ** 31 - 1),
+                                  model=model, tick=lambda: jset(jid))
         except UserError:
             if items:
                 break
@@ -638,8 +1017,22 @@ def do_video(job):
     meta = {"prompt": p["prompt"], "caption": plan["caption"], "hashtags": plan["hashtags"], "fmt": fmt, "style": style,
             "w": W, "h": H, "params": p}
 
-    jset(jid, step="در حال ساخت ویدیوی AI…", pct=10)
-    ai = ai_video_pollinations(build_prompt(plan["image_prompt"], style, fmt), fmt)
+    vm, im = p.get("model", "auto"), p.get("image_model", "auto")
+    if vm == "local:ltx-video":
+        try:
+            return do_video_ltx(job, plan, meta)
+        except UserError:
+            raise
+        except Exception as e:
+            local_release()
+            log.warning("LTX failed: %s", e, exc_info=DEBUG)
+            if not LOCAL_FALLBACK:
+                raise UserError("مدل ویدیوی لوکال الان قابل اجرا نیست؛ موتور دیگری انتخاب کن." + (f"\n[{str(e)[:200]}]" if DEBUG else ""))
+            jset(jid, step="مدل ویدیوی لوکال در دسترس نبود؛ می‌روم سراغ حالت چندصحنه…", pct=9)
+            vm = "kenburns"
+
+    jset(jid, step="در حال ساخت ویدیوی AI…" if vm in ("auto", "polli-video") else "در حال ساخت صحنه‌ها…", pct=10)
+    ai = ai_video_pollinations(build_prompt(plan["image_prompt"], style, fmt), fmt) if vm in ("auto", "polli-video") else None
     if ai:
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "ai.mp4")
@@ -655,7 +1048,8 @@ def do_video(job):
         paths, first_thumb, prov_used = [], None, ""
         for i, sc in enumerate(scenes):
             jset(jid, step=f"ساخت صحنه {i + 1} از {len(scenes)}…", pct=12 + int(55 * i / len(scenes)))
-            raw, prov_used = gen_image(build_prompt(sc["prompt"], style, fmt), fmt, random.randint(1, 2 ** 31 - 1))
+            raw, prov_used = gen_image(build_prompt(sc["prompt"], style, fmt, local=local_id(im)), fmt, random.randint(1, 2 ** 31 - 1),
+                                       model=im, tick=lambda: jset(jid))
             img = cover_crop(Image.open(io.BytesIO(raw)).convert("RGB"), W * 2, H * 2)
             path = os.path.join(td, f"s{i}.jpg")
             img.save(path, "JPEG", quality=93)
@@ -677,13 +1071,64 @@ def do_video(job):
             per = min(9.0, max(per, (vdur + 1.0 + (n - 1) * xf) / n))
         jset(jid, step="در حال مونتاژ ویدیو (حرکت دوربین، ترنزیشن، صدا)…", pct=78)
         out = os.path.join(td, "out.mp4")
-        with FFMPEG_SEM:
-            render_video(paths, [s["motion"] for s in scenes], fmt, per, vpath, out)
+        done = False
+        if vm == "local:parallax":
+            try:
+                clips = make_parallax_clips(jid, paths, [s["motion"] for s in scenes], fmt, per, td)
+                jset(jid, step="در حال مونتاژ ویدیو (پارالکس، ترنزیشن، صدا)…", pct=88)
+                with FFMPEG_SEM:
+                    render_video_from_clips(clips, [per] * len(clips), fmt, vpath, out, vdur)
+                prov_used, done = prov_used + "+parallax", True
+            except Exception as e:
+                local_release()
+                log.warning("parallax failed: %s", e, exc_info=DEBUG)
+                if not LOCAL_FALLBACK:
+                    raise UserError("پارالکس سه‌بعدی الان قابل اجرا نیست؛ موتور دیگری انتخاب کن." + (f"\n[{str(e)[:200]}]" if DEBUG else ""))
+        if not done:
+            with FFMPEG_SEM:
+                render_video(paths, [s["motion"] for s in scenes], fmt, per, vpath, out)
         data = open(out, "rb").read()
         if len(data) > 15 * 1024 * 1024:
             raise UserError("حجم ویدیو زیاد شد؛ با مدت کمتر دوباره امتحان کن.")
         jset(jid, step="در حال ذخیره…", pct=96)
-        mid = save_media(uid, "video", "video/mp4", data, first_thumb, {**meta, "provider": prov_used + "+ffmpeg"})
+        mid = save_media(uid, "video", "video/mp4", data, first_thumb, {**meta, "provider": prov_used if prov_used.endswith("+parallax") else prov_used + "+ffmpeg"})
+    return [str(mid)]
+
+
+def do_video_ltx(job, plan, meta):
+    """ویدیوی AI واقعی و لوکال: هر صحنه یک کلیپ LTX-Video؛ بعد مونتاژ با ترنزیشن و صدا"""
+    jid, uid, p = job["_id"], job["owner"], job["params"]
+    fmt, style, voice = p["fmt"], p["style"], p["voice"]
+    scenes = plan["scenes"]
+    n = len(scenes)
+    with tempfile.TemporaryDirectory() as td:
+        clips, durs = [], []
+        for i, sc in enumerate(scenes):
+            jset(jid, step=f"ساخت کلیپ AI لوکال {i + 1} از {n}… (روی GPU چند دقیقه)", pct=8 + int(62 * i / n))
+            cp = os.path.join(td, f"c{i}.mp4")
+            local_ltx_clip(build_prompt(sc["prompt"], style, fmt, local="ltx-video"), fmt, random.randint(1, 2 ** 31 - 1), cp, tick=lambda: jset(jid))
+            clips.append(cp)
+            durs.append(media_duration(cp) or 2.7)
+        vpath, vdur = None, None
+        narration = " . ".join(s["voice"] for s in scenes if s["voice"])
+        if voice != "off" and narration:
+            jset(jid, step="در حال ضبط صدای گوینده…", pct=74)
+            vpath = os.path.join(td, "voice.mp3")
+            vdur = make_voice(narration, voice, vpath)
+            if not vdur:
+                vpath = None
+        jset(jid, step="در حال مونتاژ ویدیو…", pct=82)
+        out = os.path.join(td, "out.mp4")
+        with FFMPEG_SEM:
+            render_video_from_clips(clips, durs, fmt, vpath, out, vdur)
+        poster = os.path.join(td, "p.jpg")
+        subprocess.run([ffmpeg_bin(), "-y", "-loglevel", "error", "-i", out, "-frames:v", "1", poster], capture_output=True)
+        thumb = make_thumb(open(poster, "rb").read()) if os.path.exists(poster) else b""
+        data = open(out, "rb").read()
+        if len(data) > 15 * 1024 * 1024:
+            raise UserError("حجم ویدیو زیاد شد؛ با تعداد صحنهٔ کمتر دوباره امتحان کن.")
+        jset(jid, step="در حال ذخیره…", pct=96)
+        mid = save_media(uid, "video", "video/mp4", data, thumb, {**meta, "provider": "local-ltx-video"})
     return [str(mid)]
 
 
@@ -752,6 +1197,7 @@ def api_me():
         limits={"image": DAILY_IMAGES, "video": DAILY_VIDEOS},
         formats={k: {"label": v["label"], "ratio": v["ratio"]} for k, v in FORMATS.items()},
         styles=[{"id": k, "emoji": v[0], "label": v[1]} for k, v in STYLES.items()],
+        models=model_catalog(),
         gallery=gallery(uid))
 
 
@@ -775,10 +1221,21 @@ def api_generate():
             return int(v)
         except (TypeError, ValueError):
             return d
+    cat = model_catalog()
+
+    def _pick(group, val):
+        val = str(val or "auto")
+        return val if any(m["id"] == val for m in cat[group]) else None
+    params["model"] = _pick("image" if kind == "image" else "video", b.get("model"))
+    if params["model"] is None:
+        return jsonify(error="مدل انتخاب‌شده الان در دسترس نیست؛ یکی دیگر را انتخاب کن"), 400
     if kind == "image":
         params["count"] = min(4, max(1, _int(b.get("count"), 1)))
         cost = params["count"]
     else:
+        params["image_model"] = _pick("image", b.get("image_model"))
+        if params["image_model"] is None:
+            return jsonify(error="مدل تصویر انتخاب‌شده الان در دسترس نیست"), 400
         params["scenes"] = min(5, max(3, _int(b.get("scenes"), 3)))
         params["voice"] = b.get("voice") if b.get("voice") in ("off", "female", "male") else "off"
         cost = 1
@@ -906,6 +1363,8 @@ def setup_mother():
 
 
 setup_mother()
+if LOCAL_ENABLED:
+    threading.Thread(target=_local_boot, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), threaded=True)
